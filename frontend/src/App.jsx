@@ -83,6 +83,7 @@ const useAnalysisData = (db, userId, isAuthReady) => {
 
   useEffect(() => {
     if (!db || !userId || !isAuthReady) {
+      setIsLoading(false);
       return;
     }
 

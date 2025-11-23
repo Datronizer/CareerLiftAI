@@ -13,7 +13,7 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-preview-09-2025';
 
 if (!GEMINI_API_KEY) {
   console.warn('Warning: GEMINI_API_KEY is not set. The /api/analyze endpoint will fail until you add it to your .env file.');
@@ -68,6 +68,71 @@ const ANALYSIS_SCHEMA = {
   required: ["resumeScore", "missingSkills", "recommendations", "summary"]
 };
 
+async function generateStructuredAnalysis(resumeText, careerGoal) {
+  if (!resumeText || !careerGoal) {
+    throw new Error('resumeText and careerGoal are required for analysis.');
+  }
+
+  if (!GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not configured on the server.');
+  }
+
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+
+  const systemPrompt = `You are a world-class AI Career Coach named CareerLift AI. Your task is to analyze a student's resume against their specified career goal. You must generate a score (out of 100), identify 3 crucial missing skills, and suggest 3 real-world opportunities and 3 certifications, all based on current industry standards and the user's career goal. Respond ONLY with a valid JSON object matching the provided schema.`;
+
+  const truncatedResume = resumeText.substring(0, 5000);
+
+  const userQuery = `Analyze the following resume content for the career goal: "${careerGoal}". Resume content: "${truncatedResume}".`;
+
+  const payload = {
+    contents: [{ parts: [{ text: userQuery }] }],
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: ANALYSIS_SCHEMA,
+    }
+  };
+
+  const response = await axios.post(apiUrl, payload, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 60000
+  });
+
+  const result = response.data;
+  const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  if (!text) {
+    throw new Error('Gemini response was empty or malformed.');
+  }
+
+  let analysisResult;
+  try {
+    analysisResult = JSON.parse(text);
+  } catch (parseError) {
+    throw new Error('Failed to parse Gemini JSON response.');
+  }
+
+  // Extract grounding sources
+  let sources = [];
+  const groundingMetadata = result.candidates?.[0]?.groundingMetadata;
+  if (groundingMetadata && groundingMetadata.groundingAttributions) {
+    sources = groundingMetadata.groundingAttributions
+      .map((attr) => ({
+        uri: attr.web?.uri,
+        title: attr.web?.title
+      }))
+      .filter((source) => source.uri && source.title);
+  }
+
+  return {
+    ...analysisResult,
+    timestamp: new Date().toISOString(),
+    careerGoal,
+    sources
+  };
+}
+
 app.post('/api/analyze', async (req, res) => {
   try {
     const { resumeText, careerGoal } = req.body || {};
@@ -76,67 +141,7 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(400).json({ error: 'resumeText and careerGoal are required.' });
     }
 
-    if (!GEMINI_API_KEY) {
-      return res.status(500).json({ error: 'GEMINI_API_KEY is not configured on the server.' });
-    }
-
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-
-    const systemPrompt = `You are a world-class AI Career Coach named CareerLift AI. Your task is to analyze a student's resume against their specified career goal. You must generate a score (out of 100), identify 3 crucial missing skills, and suggest 3 real-world opportunities and 3 certifications, all based on current industry standards and the user's career goal. Use Google Search to ensure your advice is grounded in current, relevant data. Respond ONLY with a valid JSON object matching the provided schema.`;
-
-    const truncatedResume = resumeText.substring(0, 5000);
-
-    const userQuery = `Analyze the following resume content for the career goal: "${careerGoal}". Resume content: "${truncatedResume}".`;
-
-    const payload = {
-      contents: [{ parts: [{ text: userQuery }] }],
-      tools: [{ "google_search": {} }],
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: ANALYSIS_SCHEMA,
-      }
-    };
-
-    const response = await axios.post(apiUrl, payload, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 60000
-    });
-
-    const result = response.data;
-    const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!text) {
-      console.error('Gemini response was empty or malformed:', JSON.stringify(result, null, 2));
-      return res.status(500).json({ error: 'Gemini response was empty or malformed.' });
-    }
-
-    let analysisResult;
-    try {
-      analysisResult = JSON.parse(text);
-    } catch (parseError) {
-      console.error('Failed to parse Gemini JSON text:', text);
-      return res.status(500).json({ error: 'Failed to parse Gemini JSON response.' });
-    }
-
-    // Extract grounding sources
-    let sources = [];
-    const groundingMetadata = result.candidates?.[0]?.groundingMetadata;
-    if (groundingMetadata && groundingMetadata.groundingAttributions) {
-      sources = groundingMetadata.groundingAttributions
-        .map((attr) => ({
-          uri: attr.web?.uri,
-          title: attr.web?.title
-        }))
-        .filter((source) => source.uri && source.title);
-    }
-
-    const analysisWithMetadata = {
-      ...analysisResult,
-      timestamp: new Date().toISOString(),
-      careerGoal,
-      sources
-    };
+    const analysisWithMetadata = await generateStructuredAnalysis(resumeText, careerGoal);
 
     return res.json(analysisWithMetadata);
   } catch (error) {
@@ -149,12 +154,15 @@ app.post('/api/analyze', async (req, res) => {
 });
 
 app.post('/api/upload-resume', upload.single('file'), async (req, res) => {
+  let filePath;
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No resume file uploaded.' });
     }
 
-    const filePath = req.file.path;
+    const { careerGoal } = req.body || {};
+
+    filePath = req.file.path;
     const fileBuffer = fs.readFileSync(filePath);
 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
@@ -187,11 +195,15 @@ app.post('/api/upload-resume', upload.single('file'), async (req, res) => {
       return res.status(500).json({ error: "Failed to extract text from resume." });
     }
 
-    fs.unlinkSync(filePath); // cleanup uploaded file
+    let analysis = null;
+    if (careerGoal) {
+      analysis = await generateStructuredAnalysis(text, careerGoal);
+    }
 
     return res.json({
       extractedText: text,
-      characterCount: text.length
+      characterCount: text.length,
+      analysis
     });
 
   } catch (error) {
@@ -201,6 +213,10 @@ app.post('/api/upload-resume', upload.single('file'), async (req, res) => {
       error: "Failed to process uploaded resume.",
       details: error?.response?.data || error.message
     });
+  } finally {
+    if (filePath && fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
   }
 });
 
