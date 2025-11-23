@@ -169,18 +169,22 @@ const useAnalysisData = (db, userId, isAuthReady) => {
       limit(1)
     );
 
-    const unsubscribe = onSnapshot(analysisQuery, (snapshot) => {
-      setIsLoading(false);
-      if (!snapshot.empty) {
-        const latestDoc = snapshot.docs[0].data();
-        setAnalysis(latestDoc);
-      } else {
-        setAnalysis(null);
+    const unsubscribe = onSnapshot(
+      analysisQuery,
+      (snapshot) => {
+        setIsLoading(false);
+        if (!snapshot.empty) {
+          const latestDoc = snapshot.docs[0].data();
+          setAnalysis(latestDoc);
+        } else {
+          setAnalysis(null);
+        }
+      },
+      (error) => {
+        console.error("Error fetching analysis data:", error);
+        setIsLoading(false);
       }
-    }, (error) => {
-      console.error("Error fetching analysis data:", error);
-      setIsLoading(false);
-    });
+    );
 
     return () => unsubscribe();
   }, [db, userId, isAuthReady]);
@@ -218,7 +222,7 @@ const analyzeResumeWithGemini = async (db, userId, resumeText, careerGoal) => {
     } catch (error) {
       if (attempt < maxRetries - 1) {
         const delay = Math.pow(2, attempt) * 1000;
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise((resolve) => setTimeout(resolve, delay));
       } else {
         throw new Error(
           `Failed to analyze resume after ${maxRetries} attempts: ${error.message}`
@@ -254,7 +258,7 @@ const uploadResumeFile = async (file, careerGoal) => {
   return result;
 };
 
-// Fetch live courses/opportunities from backend (/api/courses/external)
+// Fetch live courses/opportunities from backend (/api/courses)
 const fetchLearningResources = async (role, skills = []) => {
   const response = await fetch("/api/courses/external", {
     method: "POST",
@@ -265,6 +269,22 @@ const fetchLearningResources = async (role, skills = []) => {
   if (!response.ok) {
     const message = await response.text();
     throw new Error(`Course lookup failed (${response.status}): ${message}`);
+  }
+
+  return response.json();
+};
+
+// Fetch job matches from backend (/api/jobs)
+const fetchJobMatches = async ({ skills = [], location = "", jobTitle = "", limit = 10 }) => {
+  const response = await fetch("/api/jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ skills, location, jobTitle, limit }),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Job lookup failed (${response.status}): ${message}`);
   }
 
   return response.json();
@@ -345,13 +365,12 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
   const [analysisStatus, setAnalysisStatus] = useState("");
 
   useEffect(() => {
-    // Persist form state immediately on change
     try {
       localStorage.setItem("upload_resumeText", resumeText);
       localStorage.setItem("upload_careerGoal", careerGoal);
       localStorage.setItem("upload_customCareerGoal", customCareerGoal);
     } catch (e) {
-      // ignore storage failures (e.g., private mode)
+      // ignore storage failures
     }
   }, [resumeText, careerGoal, customCareerGoal]);
 
@@ -382,9 +401,7 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
     }
 
     const finalCareerGoal =
-      careerGoal === "Other (custom)"
-        ? customCareerGoal.trim()
-        : careerGoal;
+      careerGoal === "Other (custom)" ? customCareerGoal.trim() : careerGoal;
 
     setError(null);
     setIsAnalyzing(true);
@@ -648,7 +665,6 @@ const DashboardPage = ({
       </p>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        
         {/* Resume Score Card */}
         <IconCard
           icon={PieChart}
@@ -669,11 +685,10 @@ const DashboardPage = ({
             {summary}
           </p>
         </IconCard>
-
       </div>
 
-      <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
-         {/* Missing Skills Card */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Missing Skills Card */}
         <IconCard icon={Search} title="Crucial Missing Skills">
           <p className="text-purple-100 mb-3">
             Focus on mastering these high-demand areas to bridge your gap:
@@ -754,7 +769,6 @@ const RecommendationsPage = ({ analysisData, setCurrentPage }) => {
       </p>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        
         {/* Certifications Card */}
         <IconCard icon={Award} title="Top Certifications & Courses">
           <p className="text-purple-100 mb-3">
@@ -915,6 +929,135 @@ const RecommendationsPage = ({ analysisData, setCurrentPage }) => {
           )}
         </ul>
       </IconCard>
+    </div>
+  );
+};
+
+const JobMatchPage = ({ analysisData, setCurrentPage }) => {
+  const [jobs, setJobs] = useState([]);
+  const [location, setLocation] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const skills = analysisData?.missingSkills || [];
+  const jobTitle = analysisData?.careerGoal || '';
+
+  const loadJobs = async (loc) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await fetchJobMatches({
+        skills,
+        location: loc || location,
+        jobTitle
+      });
+      setJobs(result.jobs || []);
+    } catch (e) {
+      setError(e.message);
+      setJobs([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (jobTitle) {
+      loadJobs(location);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobTitle, JSON.stringify(skills)]);
+
+  if (!analysisData) {
+    return (
+      <div className="p-8 max-w-2xl mx-auto text-center">
+        <p className="text-lg text-red-500 mb-4">Analysis data is missing.</p>
+        <button
+          onClick={() => setCurrentPage('upload')}
+          className="inline-block bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 text-white font-bold px-6 py-3 rounded-full shadow-glow"
+        >
+          Go to Upload Page
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 md:p-8 max-w-5xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="text-4xl font-bold text-white drop-shadow-[0_0_20px_rgba(120,200,255,0.5)]">
+            Job Matches
+          </h2>
+          <p className="text-purple-100/80">
+            Tailored to: <span className="font-semibold text-cyan-200">{jobTitle}</span>
+          </p>
+        </div>
+        <button
+          onClick={() => setCurrentPage('recommendations')}
+          className="text-sm text-cyan-200 hover:text-white underline"
+        >
+          Back to Plan
+        </button>
+      </div>
+
+      <IconCard icon={Search} title="Filters">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs text-purple-200/80">Preferred Location (optional)</label>
+            <input
+              className="w-full mt-1 rounded-lg border border-purple-500/40 bg-purple-900/30 text-purple-50 p-2 focus:outline-none focus:ring-2 focus:ring-cyan-400"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="e.g., Toronto, Remote"
+            />
+          </div>
+          <div className="flex items-end">
+            <button
+              onClick={() => loadJobs(location)}
+              className="w-full bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 text-white font-semibold px-4 py-2 rounded-lg shadow-glow disabled:opacity-60"
+              disabled={isLoading}
+            >
+              {isLoading ? 'Searching…' : 'Find Jobs'}
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-purple-200/80 mt-2">
+          Using your missing skills and target role to find relevant openings.
+        </p>
+      </IconCard>
+
+      <div className="mt-6 space-y-4">
+        {error && (
+          <div className="p-3 rounded-lg border border-red-400/50 bg-red-900/30 text-red-100 text-sm">
+            {error}
+          </div>
+        )}
+        {isLoading ? (
+          <IconCard icon={Loader} title="Loading jobs...">
+            <div className="h-2 bg-purple-800/40 rounded-full overflow-hidden">
+              <div className="h-full bg-cyan-400 animate-pulse" style={{ width: '100%' }}></div>
+            </div>
+          </IconCard>
+        ) : jobs.length ? (
+          jobs.map((job, idx) => (
+            <IconCard key={idx} icon={PieChart} title={`${job.job_title || 'Role'} @ ${job.company || 'Company'}`}>
+              <div className="text-purple-100/80 text-sm">
+                <p><span className="text-cyan-200 font-semibold">Location:</span> {job.location || 'N/A'}</p>
+                <p><span className="text-cyan-200 font-semibold">Skills:</span> {job.skills || 'N/A'}</p>
+                <p><span className="text-cyan-200 font-semibold">Qualifications:</span> {job.qualifications || 'N/A'}</p>
+                <p><span className="text-cyan-200 font-semibold">Salary:</span> {job.salary_range || 'N/A'}</p>
+                <p><span className="text-cyan-200 font-semibold">Work Type:</span> {job.work_type || 'N/A'}</p>
+              </div>
+            </IconCard>
+          ))
+        ) : (
+          <IconCard icon={Award} title="No jobs found">
+            <p className="text-purple-100/80 text-sm">
+              We couldn't find matches right now. Try adjusting the location or check back later.
+            </p>
+          </IconCard>
+        )}
+      </div>
     </div>
   );
 };
@@ -1330,14 +1473,13 @@ export default function App() {
       const key = `scrollPos_${currentPageState}`;
       const raw = localStorage.getItem(key);
       const pos = raw ? parseInt(raw, 10) : 0;
-      // Wait a tick for content to render
       setTimeout(() => {
         window.scrollTo(0, isNaN(pos) ? 0 : pos);
       }, 0);
     } catch {
       // ignore
     }
-  }, [currentPageState, analysisData]); // also re-run when analysisData changes so dashboard can position correctly
+  }, [currentPageState, analysisData]);
 
   // Save scroll on beforeunload
   useEffect(() => {
@@ -1354,7 +1496,6 @@ export default function App() {
   const setCurrentPage = useCallback(
     (nextPage) => {
       try {
-        // save scroll position for the current page
         saveScrollForPage(currentPageState);
       } catch {}
       setCurrentPageState(nextPage);
@@ -1369,7 +1510,7 @@ export default function App() {
     }
   }, [isAuthReady, latestAnalysis, analysisData]);
 
-  // Whenever analysisData is updated in memory persist it (so dashboard can show after refresh)
+  // Whenever analysisData is updated in memory persist it
   useEffect(() => {
     try {
       if (analysisData) {
@@ -1409,9 +1550,15 @@ export default function App() {
             analysisData={analysisData}
           />
         );
+      case "jobs":
+        return (
+          <JobMatchPage
+            setCurrentPage={setCurrentPage}
+            analysisData={analysisData}
+          />
+        );
       case "addCourse":
         return <AddCoursePage db={db} userId={userId} />;
-
       default:
         return <LandingPage setCurrentPage={setCurrentPage} />;
     }
@@ -1429,6 +1576,7 @@ export default function App() {
     { name: "Home", page: "landing", icon: Home },
     { name: "Analyze", page: "upload", icon: UploadCloud },
     { name: "Report", page: "dashboard", icon: PieChart },
+    { name: "Jobs", page: "jobs", icon: Search },
     { name: "All Courses", page: "addCourse", icon: Award },
   ];
 
@@ -1472,8 +1620,8 @@ export default function App() {
                       : "text-purple-100/80 hover:bg-purple-900/60 hover:text-white border border-transparent hover:border-purple-500/60"
                   }`}
                 >
-                    <item.icon className="w-4 h-4 mr-2" />
-                    <span className='hidden sm:inline'>{item.name}</span>
+                  <item.icon className="w-4 h-4 mr-2" />
+                  <span className="hidden sm:inline">{item.name}</span>
                 </button>
               ))}
             </div>
@@ -1489,15 +1637,13 @@ export default function App() {
         </div>
 
         {/* Main Content Area */}
-        <main className="flex-grow p-4 md:p-6">
-          {renderPage()}
-        </main>
+        <main className="flex-grow p-4 md:p-6">{renderPage()}</main>
 
         {/* Footer */}
         <footer className="bg-black/90 text-purple-200 p-4 text-center text-xs md:text-sm border-t border-purple-900/70">
           <p>
             © {new Date().getFullYear()} CareerLift AI. Powered by Gemini &
-            Firebase. Designed by Asma 💜
+            BigQuery. Designed by our team 💜
           </p>
         </footer>
       </div>
