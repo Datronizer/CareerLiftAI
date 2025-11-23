@@ -1,13 +1,19 @@
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
 const dotenv = require('dotenv');
 const multer = require('multer');
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs');
 
+const GeminiClient = require('./services/geminiClient');
+const ANALYSIS_SCHEMA = require('./constants/analysisSchema');
+const LEARNING_SCHEMA = require('./constants/learningSchema');
+const RECOMMENDATIONS_DB = require('./data/recommendations');
+const { cleanupFile } = require('./utils/fileUtils');
 
 dotenv.config();
+
+// --- Config & Constants ---
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -19,119 +25,34 @@ if (!GEMINI_API_KEY) {
   console.warn('Warning: GEMINI_API_KEY is not set. The /api/analyze endpoint will fail until you add it to your .env file.');
 }
 
-app.use(cors());
-app.use(express.json({ limit: '2mb' }));
-
-// Ensure upload directory exists and configure multer storage
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, UPLOAD_DIR);
-  },
-  filename: function (req, file, cb) {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    cb(null, `${unique}-${file.originalname}`);
-  }
+// --- Middleware ---
+
+app.use(cors());
+app.use(express.json({ limit: '2mb' }));
+
+const geminiClient = new GeminiClient({
+  apiKey: GEMINI_API_KEY,
+  model: GEMINI_MODEL,
+  schema: ANALYSIS_SCHEMA,
+  learningSchema: LEARNING_SCHEMA
 });
 
-const upload = multer({ storage });
-
-// Define the structured JSON schema for the AI output
-const ANALYSIS_SCHEMA = {
-  type: "OBJECT",
-  properties: {
-    "resumeScore": { "type": "INTEGER", "description": "The resume score out of 100, focusing on the career goal." },
-    "missingSkills": {
-      "type": "ARRAY",
-      "items": { "type": "STRING" },
-      "description": "3 crucial skills missing for the target role, grounded in current industry needs."
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: function (_req, _file, cb) {
+      cb(null, UPLOAD_DIR);
     },
-    "recommendations": {
-      "type": "OBJECT",
-      "properties": {
-        "certifications": {
-          "type": "ARRAY",
-          "items": { "type": "STRING" },
-          "description": "3 highly relevant certifications or courses (e.g., Coursera, AWS, Google) to bridge the skill gap."
-        },
-        "opportunities": {
-          "type": "ARRAY",
-          "items": { "type": "STRING" },
-          "description": "3 real-world opportunities (e.g., hackathons, open-source projects, specialized internships) to gain experience."
-        }
-      }
-    },
-    "summary": { "type": "STRING", "description": "A concise, 3-sentence summary of the resume's strengths and weaknesses against the career goal." }
-  },
-  required: ["resumeScore", "missingSkills", "recommendations", "summary"]
-};
-
-async function generateStructuredAnalysis(resumeText, careerGoal) {
-  if (!resumeText || !careerGoal) {
-    throw new Error('resumeText and careerGoal are required for analysis.');
-  }
-
-  if (!GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY is not configured on the server.');
-  }
-
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-
-  const systemPrompt = `You are a world-class AI Career Coach named CareerLift AI. Your task is to analyze a student's resume against their specified career goal. You must generate a score (out of 100), identify 3 crucial missing skills, and suggest 3 real-world opportunities and 3 certifications, all based on current industry standards and the user's career goal. Respond ONLY with a valid JSON object matching the provided schema.`;
-
-  const truncatedResume = resumeText.substring(0, 5000);
-
-  const userQuery = `Analyze the following resume content for the career goal: "${careerGoal}". Resume content: "${truncatedResume}".`;
-
-  const payload = {
-    contents: [{ parts: [{ text: userQuery }] }],
-    systemInstruction: { parts: [{ text: systemPrompt }] },
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: ANALYSIS_SCHEMA,
+    filename: function (_req, file, cb) {
+      const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      cb(null, `${unique}-${file.originalname}`);
     }
-  };
+  })
+});
 
-  const response = await axios.post(apiUrl, payload, {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 60000
-  });
-
-  const result = response.data;
-  const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-  if (!text) {
-    throw new Error('Gemini response was empty or malformed.');
-  }
-
-  let analysisResult;
-  try {
-    analysisResult = JSON.parse(text);
-  } catch (parseError) {
-    throw new Error('Failed to parse Gemini JSON response.');
-  }
-
-  // Extract grounding sources
-  let sources = [];
-  const groundingMetadata = result.candidates?.[0]?.groundingMetadata;
-  if (groundingMetadata && groundingMetadata.groundingAttributions) {
-    sources = groundingMetadata.groundingAttributions
-      .map((attr) => ({
-        uri: attr.web?.uri,
-        title: attr.web?.title
-      }))
-      .filter((source) => source.uri && source.title);
-  }
-
-  return {
-    ...analysisResult,
-    timestamp: new Date().toISOString(),
-    careerGoal,
-    sources
-  };
-}
+// --- Routes ---
 
 app.post('/api/analyze', async (req, res) => {
   try {
@@ -141,8 +62,7 @@ app.post('/api/analyze', async (req, res) => {
       return res.status(400).json({ error: 'resumeText and careerGoal are required.' });
     }
 
-    const analysisWithMetadata = await generateStructuredAnalysis(resumeText, careerGoal);
-
+    const analysisWithMetadata = await geminiClient.generateStructuredAnalysis(resumeText, careerGoal);
     return res.json(analysisWithMetadata);
   } catch (error) {
     console.error('Error in /api/analyze:', error?.response?.data || error.message || error);
@@ -161,43 +81,13 @@ app.post('/api/upload-resume', upload.single('file'), async (req, res) => {
     }
 
     const { careerGoal } = req.body || {};
-
     filePath = req.file.path;
-    const fileBuffer = fs.readFileSync(filePath);
 
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
-
-    const base64Data = fileBuffer.toString("base64");
-
-    const payload = {
-      contents: [
-        {
-          parts: [
-            {
-              inlineData: {
-                mimeType: req.file.mimetype,
-                data: base64Data
-              }
-            }
-          ]
-        }
-      ]
-    };
-
-    const response = await axios.post(apiUrl, payload, {
-      headers: { "Content-Type": "application/json" },
-      timeout: 60000
-    });
-
-    const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!text) {
-      return res.status(500).json({ error: "Failed to extract text from resume." });
-    }
+    const text = await geminiClient.extractTextFromFile(req.file);
 
     let analysis = null;
     if (careerGoal) {
-      analysis = await generateStructuredAnalysis(text, careerGoal);
+      analysis = await geminiClient.generateStructuredAnalysis(text, careerGoal);
     }
 
     return res.json({
@@ -205,63 +95,60 @@ app.post('/api/upload-resume', upload.single('file'), async (req, res) => {
       characterCount: text.length,
       analysis
     });
-
   } catch (error) {
-    console.error('Upload error:', error?.response?.data || error);
-
+    console.error('Upload error:', error?.response?.data || error.message || error);
     return res.status(500).json({
       error: "Failed to process uploaded resume.",
       details: error?.response?.data || error.message
     });
   } finally {
-    if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
+    cleanupFile(filePath);
   }
 });
 
+app.post('/api/courses', async (req, res) => {
+  try {
+    const { role, skills } = req.body || {};
+
+    if (!role) {
+      return res.status(400).json({ error: 'role is required.' });
+    }
+
+    const skillsText = Array.isArray(skills) ? skills.join(', ') : (skills || '');
+
+    const discovery = await geminiClient.discoverLearningResources(role, skillsText);
+    const structured = await geminiClient.structureLearningResources(discovery.text);
+
+    return res.json({
+      role,
+      skills: skillsText,
+      courses: structured.courses || [],
+      opportunities: structured.opportunities || [],
+      sources: discovery.sources || []
+    });
+  } catch (error) {
+    console.error('Error in /api/courses:', error?.response?.data || error.message || error);
+    return res.status(500).json({
+      error: 'Failed to fetch courses/opportunities.',
+      details: error?.response?.data || error.message
+    });
+  }
+});
 
 app.get('/api/recommendations/details', (req, res) => {
   const { type } = req.query;
 
-  // This can be expanded or read from a JSON file
-  const DATABASE = {
-    certifications: [
-      {
-        name: "Google IT Support Certification",
-        cost: "$49/month",
-        length: "3–6 months",
-        link: "https://grow.google/certificates"
-      },
-      {
-        name: "AWS Cloud Practitioner",
-        cost: "$100",
-        length: "1–2 months",
-        link: "https://aws.amazon.com/certification/"
-      }
-    ],
-    opportunities: [
-      {
-        name: "Major League Hacking Hackathons",
-        link: "https://mlh.io",
-        difficulty: "Beginner-friendly",
-        description: "Hands-on real project exposure."
-      }
-    ]
-  };
-
-  if (!type || !DATABASE[type]) {
+  if (!type || !RECOMMENDATIONS_DB[type]) {
     return res.status(400).json({ error: "Invalid type parameter." });
   }
 
   res.json({
     type,
-    items: DATABASE[type]
+    items: RECOMMENDATIONS_DB[type]
   });
 });
 
-
-app.get('/', (req, res) => {
+app.get('/', (_req, res) => {
   res.send('CareerLift AI backend is running.');
 });
 

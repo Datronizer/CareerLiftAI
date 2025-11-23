@@ -6,12 +6,43 @@ import { getFirestore, doc, setDoc, onSnapshot, collection, query, limit, orderB
 
 // --- Global Setup & Configuration ---
 
-// App & Firebase config pulled from Vite environment variables
-const appId = import.meta.env.VITE_APP_ID || 'careerlift-default-app';
-const firebaseConfig = import.meta.env.VITE_FIREBASE_CONFIG
-  ? JSON.parse(import.meta.env.VITE_FIREBASE_CONFIG)
-  : {};
-const initialAuthToken = import.meta.env.VITE_INITIAL_AUTH_TOKEN || null;
+// Global variables provided by the environment
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'careerlift-default-app';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// The model to use for analysis
+const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
+
+// Define the structured JSON schema for the AI output
+const ANALYSIS_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    "resumeScore": { "type": "INTEGER", "description": "The resume score out of 100, focusing on the career goal." },
+    "missingSkills": {
+      "type": "ARRAY",
+      "items": { "type": "STRING" },
+      "description": "3 crucial skills missing for the target role, grounded in current industry needs."
+    },
+    "recommendations": {
+      "type": "OBJECT",
+      "properties": {
+        "certifications": {
+          "type": "ARRAY",
+          "items": { "type": "STRING" },
+          "description": "3 highly relevant certifications or courses (e.g., Coursera, AWS, Google) to bridge the skill gap."
+        },
+        "opportunities": {
+          "type": "ARRAY",
+          "items": { "type": "STRING" },
+          "description": "3 real-world opportunities (e.g., hackathons, open-source projects, specialized internships) to gain experience."
+        }
+      }
+    },
+    "summary": { "type": "STRING", "description": "A concise, 3-sentence summary of the resume's strengths and weaknesses against the career goal." }
+  },
+  required: ["resumeScore", "missingSkills", "recommendations", "summary"]
+};
 
 // --- Firebase Utilities ---
 
@@ -27,7 +58,8 @@ const useFirebase = () => {
   useEffect(() => {
     try {
       if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
-        console.error("Firebase config is missing or empty. Set VITE_FIREBASE_CONFIG in your .env file.");
+        console.error("Firebase config is missing or empty.");
+        // We still set isAuthReady to true to allow the app to render, but storage will fail.
         setIsAuthReady(true);
         return;
       }
@@ -41,33 +73,34 @@ const useFirebase = () => {
       const unsubscribe = onAuthStateChanged(authService, (user) => {
         if (user) {
           setUserId(user.uid);
-          setIsAuthReady(true);
         } else {
-          const signInPromise = initialAuthToken
+          // Attempt anonymous sign-in if no user is present
+          const signIn = initialAuthToken
             ? signInWithCustomToken(authService, initialAuthToken)
             : signInAnonymously(authService);
-
-          signInPromise
-            .then((credential) => {
-              setUserId(credential.user.uid);
-              setIsAuthReady(true);
-            })
-            .catch((error) => {
-              console.error("Firebase sign-in failed:", error);
-              // Fallback userId if sign-in fails
-              const fallbackId = crypto.randomUUID();
-              setUserId(fallbackId);
-              setIsAuthReady(true);
-            });
+          
+          signIn.then(credential => setUserId(credential.user.uid)).catch(error => {
+            console.error("Firebase sign-in failed:", error);
+            // Fallback userId if sign-in fails
+            try {
+              setUserId(crypto.randomUUID());
+            } catch {
+              setUserId(`anon-${Date.now()}`);
+            }
+          });
         }
+        setIsAuthReady(true);
       });
 
       return () => unsubscribe();
     } catch (e) {
       console.error("Error initializing Firebase:", e);
       setIsAuthReady(true);
-      const fallbackId = crypto.randomUUID();
-      setUserId(fallbackId);
+      try {
+        setUserId(crypto.randomUUID());
+      } catch {
+        setUserId(`anon-${Date.now()}`);
+      }
     }
   }, []);
 
@@ -83,7 +116,6 @@ const useAnalysisData = (db, userId, isAuthReady) => {
 
   useEffect(() => {
     if (!db || !userId || !isAuthReady) {
-      setIsLoading(false);
       return;
     }
 
@@ -94,22 +126,18 @@ const useAnalysisData = (db, userId, isAuthReady) => {
       limit(1)
     );
 
-    const unsubscribe = onSnapshot(
-      analysisQuery,
-      (snapshot) => {
-        setIsLoading(false);
-        if (!snapshot.empty) {
-          const latestDoc = snapshot.docs[0].data();
-          setAnalysis(latestDoc);
-        } else {
-          setAnalysis(null);
-        }
-      },
-      (error) => {
-        console.error("Error fetching analysis data:", error);
-        setIsLoading(false);
+    const unsubscribe = onSnapshot(analysisQuery, (snapshot) => {
+      setIsLoading(false);
+      if (!snapshot.empty) {
+        const latestDoc = snapshot.docs[0].data();
+        setAnalysis(latestDoc);
+      } else {
+        setAnalysis(null);
       }
-    );
+    }, (error) => {
+      console.error("Error fetching analysis data:", error);
+      setIsLoading(false);
+    });
 
     return () => unsubscribe();
   }, [db, userId, isAuthReady]);
@@ -117,35 +145,76 @@ const useAnalysisData = (db, userId, isAuthReady) => {
   return { analysis, isLoading };
 };
 
-// --- Gemini API Call and Persistence Logic (via backend) ---
+// --- Gemini API Call and Persistence Logic ---
 
 const analyzeResumeWithGemini = async (db, userId, resumeText, careerGoal) => {
+  const apiKey = ""; // API key is provided by the runtime environment
+  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+
+  const systemPrompt = `You are a world-class AI Career Coach named CareerLift AI. Your task is to analyze a student's resume against their specified career goal. You must generate a score (out of 100), identify 3 crucial missing skills, and suggest 3 real-world opportunities and 3 certifications, all based on current industry standards and the user's career goal. Use Google Search to ensure your advice is grounded in current, relevant data. Respond ONLY with a valid JSON object matching the provided schema.`;
+  
+  const userQuery = `Analyze the following resume content for the career goal: "${careerGoal}". Resume content: "${resumeText.substring(0, 5000)}".`; // Truncate to prevent hitting token limits on large pastes.
+
+  const payload = {
+    contents: [{ parts: [{ text: userQuery }] }],
+    tools: [{ "google_search": {} }],
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: ANALYSIS_SCHEMA,
+    }
+  };
+
   const maxRetries = 5;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const response = await fetch('/api/analyze', {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ resumeText, careerGoal })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
-        throw new Error(`Backend API call failed with status: ${response.status}`);
+        throw new Error(`API call failed with status: ${response.status}`);
       }
 
-      const analysisWithMetadata = await response.json();
+      const result = await response.json();
+      const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-      // Persist result to Firestore
-      if (db && userId) {
+      if (!text) {
+        throw new Error("Gemini response was empty or malformed.");
+      }
+
+      const analysisResult = JSON.parse(text);
+
+      // Extract grounding sources
+      let sources = [];
+      const groundingMetadata = result.candidates?.[0]?.groundingMetadata;
+      if (groundingMetadata && groundingMetadata.groundingAttributions) {
+        sources = groundingMetadata.groundingAttributions
+          .map(attr => ({ uri: attr.web?.uri, title: attr.web?.title }))
+          .filter(source => source.uri && source.title);
+      }
+
+      const analysisWithMetadata = {
+        ...analysisResult,
+        timestamp: new Date().toISOString(),
+        careerGoal,
+        sources,
+      };
+
+      // 4. Persist result to Firestore
+      if (db) {
         const docRef = doc(collection(db, `/artifacts/${appId}/users/${userId}/career_analyses`));
         await setDoc(docRef, analysisWithMetadata);
       }
 
       return analysisWithMetadata;
+
     } catch (error) {
       if (attempt < maxRetries - 1) {
         const delay = Math.pow(2, attempt) * 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await new Promise(resolve => setTimeout(resolve, delay));
       } else {
         throw new Error(`Failed to analyze resume after ${maxRetries} attempts: ${error.message}`);
       }
@@ -153,26 +222,20 @@ const analyzeResumeWithGemini = async (db, userId, resumeText, careerGoal) => {
   }
 };
 
-const uploadResumeFile = async (file) => {
-  const formData = new FormData();
-  formData.append('file', file);
-
-  const response = await fetch('/api/upload-resume', {
+// Fetch live courses/opportunities from backend (/api/courses)
+const fetchLearningResources = async (role, skills = []) => {
+  const response = await fetch('/api/courses', {
     method: 'POST',
-    body: formData
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role, skills })
   });
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(`Upload failed (${response.status}): ${message}`);
+    throw new Error(`Course lookup failed (${response.status}): ${message}`);
   }
 
-  const result = await response.json();
-  if (!result.extractedText) {
-    throw new Error('Resume text was empty in the upload response.');
-  }
-
-  return result;
+  return response.json();
 };
 
 // --- Component Helpers ---
@@ -206,14 +269,29 @@ const LandingPage = ({ setCurrentPage }) => (
   </div>
 );
 
+/**
+ * UploadPage now persists its form state (resumeText & careerGoal) into localStorage
+ * so the form is restored across refreshes. It also uses the provided setCurrentPage
+ * wrapper (which preserves scroll positions) — nothing else in the app needs to change.
+ */
 const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
-  const [resumeText, setResumeText] = useState('');
-  const [careerGoal, setCareerGoal] = useState('Software Engineer (Full-Stack)');
+  const storedResume = typeof window !== 'undefined' ? localStorage.getItem('upload_resumeText') : '';
+  const storedGoal = typeof window !== 'undefined' ? localStorage.getItem('upload_careerGoal') : null;
+
+  const [resumeText, setResumeText] = useState(storedResume || '');
+  const [careerGoal, setCareerGoal] = useState(storedGoal || 'Software Engineer');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState(null);
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadError, setUploadError] = useState(null);
+
+  useEffect(() => {
+    // Persist form state immediately on change
+    try {
+      localStorage.setItem('upload_resumeText', resumeText);
+      localStorage.setItem('upload_careerGoal', careerGoal);
+    } catch (e) {
+      // ignore storage failures (e.g., private mode)
+    }
+  }, [resumeText, careerGoal]);
 
   const careerGoals = [
     'Software Engineer (Full-Stack)',
@@ -225,25 +303,6 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
     'Mechanical Engineer',
   ];
 
-  const handleUploadFile = async () => {
-    if (!selectedFile) {
-      setUploadError('Please choose a file first.');
-      return;
-    }
-
-    setUploadError(null);
-    setIsUploading(true);
-    try {
-      const { extractedText } = await uploadResumeFile(selectedFile);
-      setResumeText(extractedText);
-      setError(null);
-    } catch (e) {
-      setUploadError(e.message);
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
   const handleAnalyze = async () => {
     if (resumeText.length < 50) {
       setError("Please paste a more complete resume (at least 50 characters) to get an accurate analysis.");
@@ -251,10 +310,15 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
     }
     setError(null);
     setIsAnalyzing(true);
-
+    
     try {
       const result = await analyzeResumeWithGemini(db, userId, resumeText, careerGoal);
       setAnalysisData(result);
+
+      // keep the form state but it's safe to clear if you prefer:
+      // localStorage.removeItem('upload_resumeText');
+      // localStorage.removeItem('upload_careerGoal');
+
       setCurrentPage('dashboard');
     } catch (e) {
       console.error(e);
@@ -271,46 +335,6 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
         {/* Input Card */}
         <IconCard icon={UploadCloud} title="Resume Content" className="lg:col-span-1">
           <p className="text-sm text-gray-500 mb-2">Paste your resume text here (PDF upload simulated).</p>
-          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:space-x-3 space-y-2 sm:space-y-0 mb-3">
-            <input
-              type="file"
-              accept=".pdf,.doc,.docx,.txt"
-              className="text-sm text-gray-700 flex-1 min-w-0"
-              onChange={(e) => {
-                setSelectedFile(e.target.files?.[0] || null);
-                setUploadError(null);
-              }}
-              disabled={isAnalyzing || isUploading}
-            />
-            <button
-              type="button"
-              onClick={handleUploadFile}
-              className="bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold px-3 py-2 rounded-lg shadow disabled:opacity-60 flex items-center justify-center"
-              disabled={!selectedFile || isUploading || isAnalyzing}
-            >
-              {isUploading ? (
-                <>
-                  <Loader className="w-4 h-4 mr-2 animate-spin" />
-                  Extracting...
-                </>
-              ) : (
-                'Extract text'
-              )}
-            </button>
-          </div>
-          {selectedFile?.name && (
-            <div
-              className="text-xs text-gray-500 truncate max-w-full mb-2"
-              title={selectedFile.name}
-            >
-              Selected file: {selectedFile.name}
-            </div>
-          )}
-          {uploadError && (
-            <div className="p-2 mb-3 text-red-700 bg-red-100 border border-red-200 rounded-lg text-xs font-medium">
-              {uploadError}
-            </div>
-          )}
           <textarea
             className="w-full h-64 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 font-mono text-sm shadow-inner"
             placeholder="Start by pasting your full resume content (experience, education, skills, projects)..."
@@ -325,29 +349,25 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
 
         {/* Goal and Action Card */}
         <IconCard icon={Search} title="Career Goal & Action" className="lg:col-span-1 flex flex-col justify-between">
-          <div className="flex-grow">
-            <label htmlFor="career-goal" className="block text-md font-medium text-gray-700 mb-2">
-              Target Career Goal
-            </label>
-            <select
-              id="career-goal"
-              className="border p-3 w-full rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500 transition-shadow"
-              value={careerGoal}
-              onChange={(e) => setCareerGoal(e.target.value)}
-              disabled={isAnalyzing}
-            >
-              {careerGoals.map((goal) => (
-                <option key={goal} value={goal}>
-                  {goal}
-                </option>
-              ))}
-            </select>
+            <div className='flex-grow'>
+                <label htmlFor="career-goal" className="block text-md font-medium text-gray-700 mb-2">
+                    Target Career Goal
+                </label>
+                <select
+                    id="career-goal"
+                    className="border p-3 w-full rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500 transition-shadow"
+                    value={careerGoal}
+                    onChange={(e) => setCareerGoal(e.target.value)}
+                    disabled={isAnalyzing}
+                >
+                    {careerGoals.map(goal => (
+                      <option key={goal} value={goal}>{goal}</option>
+                    ))}
+                </select>
 
-            <p className="text-sm text-gray-500 mt-4">
-              The AI will benchmark your skills against this specific industry role.
-            </p>
-          </div>
-
+                <p className="text-sm text-gray-500 mt-4">The AI will benchmark your skills against this specific industry role.</p>
+            </div>
+          
           <div className="mt-8 pt-4 border-t border-gray-200">
             {error && (
               <div className="p-3 mb-4 text-red-700 bg-red-100 border border-red-200 rounded-lg text-sm font-medium">
@@ -357,7 +377,7 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
             <button
               onClick={handleAnalyze}
               className="bg-green-600 hover:bg-green-700 transition-colors text-white font-bold px-6 py-3 rounded-xl w-full shadow-md disabled:opacity-50 flex items-center justify-center transform hover:scale-[1.01]"
-              disabled={isAnalyzing || isUploading || resumeText.length < 50}
+              disabled={isAnalyzing || resumeText.length < 50}
             >
               {isAnalyzing ? (
                 <>
@@ -367,7 +387,7 @@ const UploadPage = ({ setCurrentPage, setAnalysisData, db, userId }) => {
               ) : (
                 <>
                   <Zap className="w-5 h-5 mr-2" />
-                  Analyze &amp; Get Personalized Plan
+                  Analyze & Get Personalized Plan
                 </>
               )}
             </button>
@@ -404,17 +424,15 @@ const DashboardPage = ({ setCurrentPage, analysisData, isAuthReady, isLoading })
   }
 
   const { resumeScore, missingSkills, summary, careerGoal } = analysisData;
-  const scoreColor =
-    resumeScore >= 80 ? 'text-green-600' : resumeScore >= 60 ? 'text-yellow-600' : 'text-red-600';
-
+  const scoreColor = resumeScore >= 80 ? 'text-green-600' : resumeScore >= 60 ? 'text-yellow-600' : 'text-red-600';
+  
   return (
     <div className="p-4 md:p-8 max-w-4xl mx-auto">
       <h2 className="text-4xl font-extrabold text-gray-900 mb-2">Your Career Report</h2>
-      <p className="text-lg text-gray-600 mb-8">
-        Analysis for target role: <span className="font-semibold text-blue-600">{careerGoal}</span>
-      </p>
+      <p className="text-lg text-gray-600 mb-8">Analysis for target role: <span className="font-semibold text-blue-600">{careerGoal}</span></p>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        
         {/* Resume Score Card */}
         <IconCard icon={PieChart} title="Resume Score" className="md:col-span-1 text-center">
           <div className={`text-6xl font-bold ${scoreColor} my-3`}>{resumeScore}%</div>
@@ -423,24 +441,20 @@ const DashboardPage = ({ setCurrentPage, analysisData, isAuthReady, isLoading })
 
         {/* Summary Card */}
         <IconCard icon={Award} title="AI Summary" className="md:col-span-2">
-          <p className="text-gray-700 leading-relaxed italic border-l-4 border-blue-200 pl-4 py-1">
-            {summary}
-          </p>
+            <p className="text-gray-700 leading-relaxed italic border-l-4 border-blue-200 pl-4 py-1">
+                {summary}
+            </p>
         </IconCard>
+
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Missing Skills Card */}
+      <div className='grid grid-cols-1 md:grid-cols-2 gap-6'>
+         {/* Missing Skills Card */}
         <IconCard icon={Search} title="Crucial Missing Skills">
-          <p className="text-gray-600 mb-3">
-            Focus on mastering these high-demand areas to bridge your gap:
-          </p>
+          <p className="text-gray-600 mb-3">Focus on mastering these high-demand areas to bridge your gap:</p>
           <ul className="space-y-3">
             {missingSkills.map((skill, index) => (
-              <li
-                key={index}
-                className="flex items-center p-3 bg-red-50 rounded-lg text-red-700 font-medium"
-              >
+              <li key={index} className="flex items-center p-3 bg-red-50 rounded-lg text-red-700 font-medium">
                 <span className="text-red-400 mr-3">•</span> {skill}
               </li>
             ))}
@@ -449,9 +463,7 @@ const DashboardPage = ({ setCurrentPage, analysisData, isAuthReady, isLoading })
 
         {/* Action Button */}
         <IconCard icon={Zap} title="Next Steps">
-          <p className="text-gray-600 mb-4">
-            You have a clear path forward. Dive into the detailed plan to start leveling up your profile today.
-          </p>
+          <p className="text-gray-600 mb-4">You have a clear path forward. Dive into the detailed plan to start leveling up your profile today.</p>
           <button
             onClick={() => setCurrentPage('recommendations')}
             className="bg-blue-600 hover:bg-blue-700 transition-colors text-white font-bold px-6 py-3 rounded-xl w-full shadow-lg transform hover:scale-[1.01]"
@@ -465,21 +477,32 @@ const DashboardPage = ({ setCurrentPage, analysisData, isAuthReady, isLoading })
 };
 
 const RecommendationsPage = ({ analysisData, setCurrentPage }) => {
+  const [learning, setLearning] = useState(null);
+  const [isFetchingCourses, setIsFetchingCourses] = useState(false);
+  const [courseError, setCourseError] = useState(null);
+
   if (!analysisData) {
     return (
-      <div className="p-8 max-w-2xl mx-auto text-center">
-        <p className="text-lg text-red-500 mb-4">Analysis data is missing.</p>
-        <button
-          onClick={() => setCurrentPage('upload')}
-          className="inline-block bg-blue-600 hover:bg-blue-700 transition-colors text-white font-bold px-6 py-3 rounded-full shadow-md"
-        >
-          Go to Upload Page
-        </button>
-      </div>
+        <div className="p-8 max-w-2xl mx-auto text-center">
+            <p className="text-lg text-red-500 mb-4">Analysis data is missing.</p>
+            <button onClick={() => setCurrentPage('upload')}>Go to Upload Page</button>
+        </div>
     );
   }
 
-  const { recommendations, sources = [] } = analysisData;
+  const { recommendations, sources = [], careerGoal, missingSkills = [] } = analysisData;
+
+  useEffect(() => {
+    if (!careerGoal) return;
+    setIsFetchingCourses(true);
+    fetchLearningResources(careerGoal, missingSkills)
+      .then((data) => {
+        setLearning(data);
+        setCourseError(null);
+      })
+      .catch((err) => setCourseError(err.message))
+      .finally(() => setIsFetchingCourses(false));
+  }, [careerGoal, JSON.stringify(missingSkills)]);
 
   return (
     <div className="p-4 md:p-8 max-w-4xl mx-auto">
@@ -487,15 +510,13 @@ const RecommendationsPage = ({ analysisData, setCurrentPage }) => {
       <p className="text-lg text-gray-600 mb-8">Based on your skill gaps and target career.</p>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        
         {/* Certifications Card */}
         <IconCard icon={Award} title="Top Certifications & Courses">
           <p className="text-gray-600 mb-3">Gain formal knowledge and credentials:</p>
           <ul className="space-y-4">
             {recommendations.certifications.map((cert, index) => (
-              <li
-                key={index}
-                className="p-3 bg-yellow-50 rounded-lg border-l-4 border-yellow-400 text-gray-800 font-medium"
-              >
+              <li key={index} className="p-3 bg-yellow-50 rounded-lg border-l-4 border-yellow-400 text-gray-800 font-medium">
                 {cert}
               </li>
             ))}
@@ -507,10 +528,7 @@ const RecommendationsPage = ({ analysisData, setCurrentPage }) => {
           <p className="text-gray-600 mb-3">Build a strong portfolio through hands-on experience:</p>
           <ul className="space-y-4">
             {recommendations.opportunities.map((opp, index) => (
-              <li
-                key={index}
-                className="p-3 bg-blue-50 rounded-lg border-l-4 border-blue-400 text-gray-800 font-medium"
-              >
+              <li key={index} className="p-3 bg-blue-50 rounded-lg border-l-4 border-blue-400 text-gray-800 font-medium">
                 {opp}
               </li>
             ))}
@@ -518,94 +536,205 @@ const RecommendationsPage = ({ analysisData, setCurrentPage }) => {
         </IconCard>
       </div>
 
-      <IconCard icon={Search} title="AI Grounding Sources (Google Search)">
-        <p className="text-sm text-gray-600 mb-3">
-          The AI used the following current web sources to generate accurate advice:
-        </p>
-        <ul className="space-y-2">
-          {sources.length > 0 ? (
-            sources.map((source, index) => (
-              <li
-                key={index}
-                className="text-xs text-blue-700 hover:text-blue-900 truncate"
-              >
-                <a
-                  href={source.uri}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={source.title}
-                  className="underline"
-                >
-                  {source.title || source.uri}
-                </a>
-              </li>
-            ))
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <IconCard icon={Award} title="Live Course Picks (Gemini + Google Search)">
+          {isFetchingCourses ? (
+            <div className="flex items-center text-sm text-gray-600">
+              <Loader className="w-4 h-4 mr-2 animate-spin" /> Fetching real courses...
+            </div>
+          ) : courseError ? (
+            <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-2">
+              {courseError}
+            </div>
+          ) : learning?.courses?.length ? (
+            <ul className="space-y-3">
+              {learning.courses.map((course, idx) => (
+                <li key={idx} className="p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
+                  <div className="font-semibold text-gray-800">{course.title}</div>
+                  <div className="text-xs text-gray-600">{course.provider}</div>
+                  <div className="text-xs text-gray-500">{course.duration || ''} {course.cost ? `• ${course.cost}` : ''}</div>
+                  <a className="text-xs text-blue-700 underline" href={course.link} target="_blank" rel="noreferrer">Open</a>
+                </li>
+              ))}
+            </ul>
           ) : (
-            <li className="text-xs text-gray-500">
-              No direct web sources cited (information based on the model&apos;s general knowledge and
-              structured response logic).
-            </li>
+            <p className="text-sm text-gray-500">No live courses returned yet.</p>
           )}
+        </IconCard>
+
+        <IconCard icon={Zap} title="Live Opportunities">
+          {isFetchingCourses ? (
+            <div className="flex items-center text-sm text-gray-600">
+              <Loader className="w-4 h-4 mr-2 animate-spin" /> Fetching opportunities...
+            </div>
+          ) : courseError ? (
+            <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-2">
+              {courseError}
+            </div>
+          ) : learning?.opportunities?.length ? (
+            <ul className="space-y-3">
+              {learning.opportunities.map((opp, idx) => (
+                <li key={idx} className="p-3 bg-white border border-gray-200 rounded-lg shadow-sm">
+                  <div className="font-semibold text-gray-800">{opp.name}</div>
+                  <div className="text-xs text-gray-600">{opp.description || ''}</div>
+                  <div className="text-xs text-gray-500">{opp.difficulty || ''}</div>
+                  <a className="text-xs text-blue-700 underline" href={opp.link} target="_blank" rel="noreferrer">Open</a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-gray-500">No live opportunities returned yet.</p>
+          )}
+        </IconCard>
+      </div>
+
+      <IconCard icon={Search} title="AI Grounding Sources (Google Search)">
+        <p className="text-sm text-gray-600 mb-3">The AI used the following current web sources to generate accurate advice:</p>
+        <ul className="space-y-2">
+            {sources.length > 0 ? (
+                sources.map((source, index) => (
+                    <li key={index} className="text-xs text-blue-700 hover:text-blue-900 truncate">
+                        <a href={source.uri} target="_blank" rel="noopener noreferrer" title={source.title} className='underline'>
+                           {source.title || source.uri}
+                        </a>
+                    </li>
+                ))
+            ) : (
+                <li className='text-xs text-gray-500'>No direct web sources cited (information based on the model's general knowledge and structured response logic).</li>
+            )}
         </ul>
       </IconCard>
     </div>
   );
 };
 
+
 // --- Main Application Component ---
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState('landing');
-  const [analysisData, setAnalysisData] = useState(null);
+  // Initialize currentPage from localStorage so refresh restores last page (Option 1)
+  const [currentPageState, setCurrentPageState] = useState(() => {
+    try {
+      return localStorage.getItem('currentPage') || 'landing';
+    } catch {
+      return 'landing';
+    }
+  });
+
+  // analysis data (kept in memory but persisted to localStorage when available so dashboard can show after refresh)
+  const [analysisData, setAnalysisData] = useState(() => {
+    try {
+      const raw = localStorage.getItem('analysisData');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
 
   // Firebase Hook
   const { db, userId, isAuthReady } = useFirebase();
-  const { analysis: latestAnalysis, isLoading: isLoadingAnalysis } = useAnalysisData(
-    db,
-    userId,
-    isAuthReady
-  );
+  const { analysis: latestAnalysis, isLoading: isLoadingAnalysis } = useAnalysisData(db, userId, isAuthReady);
 
-  // Set the latest loaded analysis data once Firebase is ready
+  // When Firestore yields the latestAnalysis, update local and persist it
   useEffect(() => {
     if (isAuthReady && latestAnalysis) {
       setAnalysisData(latestAnalysis);
+      try {
+        localStorage.setItem('analysisData', JSON.stringify(latestAnalysis));
+      } catch {
+        // ignore localStorage failures
+      }
     }
   }, [isAuthReady, latestAnalysis]);
 
+  // Persist current page whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem('currentPage', currentPageState);
+    } catch {
+      // ignore storage failure
+    }
+  }, [currentPageState]);
+
+  // Save scroll position for the current page before switching away or before unload
+  const saveScrollForPage = useCallback((pageKey) => {
+    try {
+      if (typeof window === 'undefined') return;
+      const scrollY = window.scrollY || window.pageYOffset || 0;
+      localStorage.setItem(`scrollPos_${pageKey}`, String(Math.floor(scrollY)));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Restore scroll position when currentPageState changes (after render)
+  useEffect(() => {
+    try {
+      if (typeof window === 'undefined') return;
+      const key = `scrollPos_${currentPageState}`;
+      const raw = localStorage.getItem(key);
+      const pos = raw ? parseInt(raw, 10) : 0;
+      // Wait a tick for content to render
+      setTimeout(() => {
+        window.scrollTo(0, isNaN(pos) ? 0 : pos);
+      }, 0);
+    } catch {
+      // ignore
+    }
+  }, [currentPageState, analysisData]); // also re-run when analysisData changes so dashboard can position correctly
+
+  // Save scroll on beforeunload
+  useEffect(() => {
+    const handler = () => {
+      try {
+        saveScrollForPage(currentPageState);
+      } catch {}
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [currentPageState, saveScrollForPage]);
+
+  // wrapped setter that saves scroll of the outgoing page and updates state
+  const setCurrentPage = useCallback((nextPage) => {
+    try {
+      // save scroll position for the current page
+      saveScrollForPage(currentPageState);
+    } catch {}
+    setCurrentPageState(nextPage);
+  }, [currentPageState, saveScrollForPage]);
+
+  // Set the latest loaded analysis data once Firebase is ready if not already set
+  useEffect(() => {
+    if (!analysisData && isAuthReady && latestAnalysis) {
+      setAnalysisData(latestAnalysis);
+    }
+  }, [isAuthReady, latestAnalysis, analysisData]);
+
+  // Whenever analysisData is updated in memory persist it (so dashboard can show after refresh)
+  useEffect(() => {
+    try {
+      if (analysisData) {
+        localStorage.setItem('analysisData', JSON.stringify(analysisData));
+      }
+    } catch {
+      // ignore
+    }
+  }, [analysisData]);
+
   const renderPage = useCallback(() => {
-    switch (currentPage) {
+    switch (currentPageState) {
       case 'landing':
         return <LandingPage setCurrentPage={setCurrentPage} />;
       case 'upload':
-        return (
-          <UploadPage
-            setCurrentPage={setCurrentPage}
-            setAnalysisData={setAnalysisData}
-            db={db}
-            userId={userId}
-          />
-        );
+        return <UploadPage setCurrentPage={setCurrentPage} setAnalysisData={setAnalysisData} db={db} userId={userId} />;
       case 'dashboard':
-        return (
-          <DashboardPage
-            setCurrentPage={setCurrentPage}
-            analysisData={analysisData}
-            isAuthReady={isAuthReady}
-            isLoading={isLoadingAnalysis}
-          />
-        );
+        return <DashboardPage setCurrentPage={setCurrentPage} analysisData={analysisData} isAuthReady={isAuthReady} isLoading={isLoadingAnalysis} />;
       case 'recommendations':
-        return (
-          <RecommendationsPage
-            setCurrentPage={setCurrentPage}
-            analysisData={analysisData}
-          />
-        );
+        return <RecommendationsPage setCurrentPage={setCurrentPage} analysisData={analysisData} />;
       default:
         return <LandingPage setCurrentPage={setCurrentPage} />;
     }
-  }, [currentPage, analysisData, db, userId, isAuthReady, isLoadingAnalysis]);
+  }, [currentPageState, analysisData, db, userId, isAuthReady, isLoadingAnalysis, setCurrentPage]);
 
   const navItems = [
     { name: 'Home', page: 'landing', icon: Home },
@@ -615,12 +744,12 @@ export default function App() {
 
   return (
     <>
-      {/* Tailwind CSS CDN and viewport meta are loaded in index.html */}
+      {/* Tailwind CSS CDN and viewport meta are assumed to be loaded by the environment */}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
         body { font-family: 'Inter', sans-serif; }
       `}</style>
-
+      
       <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col">
         {/* Header and Navigation */}
         <header className="bg-blue-700 shadow-xl z-10 sticky top-0">
@@ -629,40 +758,39 @@ export default function App() {
               <Zap className="w-6 h-6 mr-2 text-yellow-300" />
               CareerLift AI
             </div>
-
+            
             <div className="flex items-center space-x-4">
               {navItems.map((item) => (
                 <button
                   key={item.page}
                   onClick={() => setCurrentPage(item.page)}
                   className={`flex items-center px-3 py-2 rounded-lg transition-colors text-sm font-medium ${
-                    currentPage === item.page
+                    currentPageState === item.page
                       ? 'bg-blue-600 text-white shadow-md'
                       : 'text-blue-100 hover:bg-blue-600 hover:text-white'
                   }`}
                 >
-                  <item.icon className="w-4 h-4 mr-2" />
-                  <span className="hidden sm:inline">{item.name}</span>
+                    <item.icon className="w-4 h-4 mr-2" />
+                    <span className='hidden sm:inline'>{item.name}</span>
                 </button>
               ))}
             </div>
           </div>
         </header>
 
-        {/* User ID Display (for multi-user persistence) */}
+        {/* User ID Display (Mandatory for multi-user apps) */}
         <div className="bg-gray-100 p-2 text-center text-xs text-gray-500 border-b border-gray-200">
-          User ID (for persistence):{' '}
-          <span className="font-mono text-gray-700 break-all">
-            {userId || 'Authenticating...'}
-          </span>
+            User ID (for persistence): <span className="font-mono text-gray-700 break-all">{userId || 'Authenticating...'}</span>
         </div>
 
         {/* Main Content Area */}
-        <main className="flex-grow p-4 md:p-6">{renderPage()}</main>
+        <main className="flex-grow p-4 md:p-6">
+          {renderPage()}
+        </main>
 
         {/* Footer */}
         <footer className="bg-gray-800 text-white p-4 text-center text-sm">
-          <p>&copy; {new Date().getFullYear()} CareerLift AI. Powered by Gemini &amp; Firebase.</p>
+            <p>&copy; {new Date().getFullYear()} CareerLift AI. Powered by Gemini & Firebase.</p>
         </footer>
       </div>
     </>
