@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const dotenv = require('dotenv');
+const multer = require('multer');
+
 
 dotenv.config();
 
@@ -127,6 +129,103 @@ app.post('/api/analyze', async (req, res) => {
     });
   }
 });
+
+app.post('/api/upload-resume', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No resume file uploaded.' });
+    }
+
+    const filePath = req.file.path;
+    const fileBuffer = fs.readFileSync(filePath);
+
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+
+    const base64Data = fileBuffer.toString("base64");
+
+    const payload = {
+      contents: [
+        {
+          parts: [
+            {
+              inlineData: {
+                mimeType: req.file.mimetype,
+                data: base64Data
+              }
+            }
+          ]
+        }
+      ]
+    };
+
+    const response = await axios.post(apiUrl, payload, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 60000
+    });
+
+    const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    if (!text) {
+      return res.status(500).json({ error: "Failed to extract text from resume." });
+    }
+
+    fs.unlinkSync(filePath); // cleanup uploaded file
+
+    return res.json({
+      extractedText: text,
+      characterCount: text.length
+    });
+
+  } catch (error) {
+    console.error('Upload error:', error?.response?.data || error);
+
+    return res.status(500).json({
+      error: "Failed to process uploaded resume.",
+      details: error?.response?.data || error.message
+    });
+  }
+});
+
+
+app.get('/api/recommendations/details', (req, res) => {
+  const { type } = req.query;
+
+  // This can be expanded or read from a JSON file
+  const DATABASE = {
+    certifications: [
+      {
+        name: "Google IT Support Certification",
+        cost: "$49/month",
+        length: "3–6 months",
+        link: "https://grow.google/certificates"
+      },
+      {
+        name: "AWS Cloud Practitioner",
+        cost: "$100",
+        length: "1–2 months",
+        link: "https://aws.amazon.com/certification/"
+      }
+    ],
+    opportunities: [
+      {
+        name: "Major League Hacking Hackathons",
+        link: "https://mlh.io",
+        difficulty: "Beginner-friendly",
+        description: "Hands-on real project exposure."
+      }
+    ]
+  };
+
+  if (!type || !DATABASE[type]) {
+    return res.status(400).json({ error: "Invalid type parameter." });
+  }
+
+  res.json({
+    type,
+    items: DATABASE[type]
+  });
+});
+
 
 app.get('/', (req, res) => {
   res.send('CareerLift AI backend is running.');
