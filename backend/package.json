@@ -9,10 +9,12 @@
   },
   "dependencies": {
     "axios": "^1.7.0",
+    "@google-cloud/bigquery": "^7.7.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",
     "express": "^4.19.0",
-    "multer": "^2.0.2"
+    "multer": "^2.0.2",
+    "morgan": "^1.10.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"

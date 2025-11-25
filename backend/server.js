@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const morgan = require('morgan');
 
 const GeminiClient = require('./services/geminiClient');
 const ANALYSIS_SCHEMA = require('./constants/analysisSchema');
@@ -11,6 +12,7 @@ const LEARNING_SCHEMA = require('./constants/learningSchema');
 const RECOMMENDATIONS_DB = require('./data/recommendations');
 const { cleanupFile } = require('./utils/fileUtils');
 const VertexCourseSearch = require('./services/vertexSearch');
+const JobMatchService = require('./services/jobMatch');
 
 dotenv.config();
 
@@ -22,6 +24,12 @@ const PORT = process.env.PORT || 4000;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-preview-09-2025';
 const VERTEX_API_KEY = process.env.VERTEX_API_KEY;
+const VERTEX_MODEL = process.env.VERTEX_MODEL || 'gemini-2.5-flash-lite';
+const JOBS_PROJECT_ID = process.env.BQ_PROJECT_ID || process.env.GCP_PROJECT;
+const JOBS_DATASET = process.env.BQ_DATASET;
+const JOBS_TABLE = process.env.BQ_TABLE;
+const JOBS_CREDENTIALS_JSON = process.env.BQ_CREDENTIALS_JSON;
+const JOBS_CREDENTIALS_FILE = process.env.BQ_CREDENTIALS_FILE || path.join(__dirname, 'infraguard-ai-479022-65e05c000c1e.json');
 
 if (!GEMINI_API_KEY) {
   console.warn('Warning: GEMINI_API_KEY is not set. The /api/analyze endpoint will fail until you add it to your .env file.');
@@ -85,6 +93,7 @@ const chooseLink = (candidateLink, sources = []) => {
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+app.use(morgan('dev'));
 
 const geminiClient = new GeminiClient({
   apiKey: GEMINI_API_KEY,
@@ -94,8 +103,34 @@ const geminiClient = new GeminiClient({
 });
 const vertexSearch = new VertexCourseSearch({
   apiKey: VERTEX_API_KEY,
-  model: process.env.VERTEX_MODEL || 'gemini-2.5-flash-lite',
+  model: VERTEX_MODEL,
   schema: LEARNING_SCHEMA
+});
+const jobMatchService = new JobMatchService({
+  projectId: JOBS_PROJECT_ID,
+  dataset: JOBS_DATASET,
+  table: JOBS_TABLE,
+  credentials: (() => {
+    if (JOBS_CREDENTIALS_JSON) {
+      try {
+        return JSON.parse(JOBS_CREDENTIALS_JSON);
+      } catch (err) {
+        console.error('[jobs] Failed to parse BQ_CREDENTIALS_JSON:', err.message);
+      }
+    }
+
+    // Fallback to credentials file if present
+    if (fs.existsSync(JOBS_CREDENTIALS_FILE)) {
+      try {
+        const raw = fs.readFileSync(JOBS_CREDENTIALS_FILE, 'utf8');
+        return JSON.parse(raw);
+      } catch (err) {
+        console.error('[jobs] Failed to read BQ_CREDENTIALS_FILE:', err.message);
+      }
+    }
+
+    return undefined;
+  })()
 });
 
 const upload = multer({
@@ -259,73 +294,30 @@ app.get('/', (_req, res) => {
   res.send('CareerLift AI backend is running.');
 });
 
-// ======================== COURSE MANAGEMENT ========================
+app.post('/api/jobs', async (req, res) => {
+  try {
+    const { skills = [], location = '', jobTitle = '', limit = 10 } = req.body || {};
 
-// In-memory database
-let courses = [];
-let nextCourseId = 1;
-
-// CREATE COURSE
-app.post("/api/courses", (req, res) => {
-    const { title, category, level, description, url, createdBy } = req.body;
-
-    if (!title || !category || !level) {
-        return res.status(400).json({ error: "Missing required fields" });
+    if (!jobMatchService.isEnabled()) {
+      return res.status(503).json({ error: 'Job matching is not configured on the server.' });
     }
 
-    const newCourse = {
-        id: nextCourseId++,
-        title,
-        category,
-        level,
-        description,
-        url,
-        createdBy,
-        createdAt: new Date().toISOString()
-    };
+    console.log(`[jobs] jobTitle="${jobTitle}" location="${location}" skills="${Array.isArray(skills) ? skills.join(', ') : skills}"`);
+    const rows = await jobMatchService.findJobs(
+      {
+        skills: Array.isArray(skills) ? skills : [skills],
+        location,
+        jobTitle
+      },
+      Math.min(Math.max(parseInt(limit, 10) || 10, 1), 50)
+    );
 
-    courses.push(newCourse);
-    res.json({ message: "Course created successfully", course: newCourse });
+    return res.json({ jobs: rows });
+  } catch (error) {
+    logError('jobs', error);
+    return res.status(500).json({ error: 'Failed to fetch jobs from BigQuery.', details: error?.message });
+  }
 });
-
-// GET ALL COURSES
-app.get("/api/courses", (req, res) => {
-    res.json(courses);
-});
-
-// UPDATE COURSE
-app.put("/api/courses/:id", (req, res) => {
-    const id = parseInt(req.params.id);
-    const course = courses.find((c) => c.id === id);
-
-    if (!course) {
-        return res.status(404).json({ error: "Course not found" });
-    }
-
-    const { title, category, level, description, url } = req.body;
-
-    if (title) course.title = title;
-    if (category) course.category = category;
-    if (level) course.level = level;
-    if (description) course.description = description;
-    if (url) course.url = url;
-
-    res.json({ message: "Course updated successfully", course });
-});
-
-// DELETE COURSE
-app.delete("/api/courses/:id", (req, res) => {
-    const id = parseInt(req.params.id);
-
-    const exists = courses.some((c) => c.id === id);
-    if (!exists) {
-        return res.status(404).json({ error: "Course not found" });
-    }
-
-    courses = courses.filter((c) => c.id !== id);
-    res.json({ message: "Course deleted successfully", id });
-});
-
 
 app.listen(PORT, () => {
   console.log(`CareerLift AI backend listening on port ${PORT}`);
