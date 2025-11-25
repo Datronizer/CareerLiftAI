@@ -1,7 +1,12 @@
-const axios = require('axios');
-const fs = require('fs');
+import axios from 'axios';
+import fs from 'fs';
 
-class GeminiClient {
+export class GeminiClient {
+  apiKey: any;
+  model: any;
+  schema: any;
+  learningSchema: any;
+  
   constructor({ apiKey, model, schema, learningSchema }) {
     this.apiKey = apiKey;
     this.model = model;
@@ -185,5 +190,3 @@ class GeminiClient {
     }
   }
 }
-
-module.exports = GeminiClient;

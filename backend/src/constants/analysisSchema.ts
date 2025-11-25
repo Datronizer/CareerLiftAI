@@ -1,4 +1,4 @@
-module.exports = {
+export const ANALYSIS_SCHEMA = {
   type: "OBJECT",
   properties: {
     "resumeScore": { "type": "INTEGER", "description": "The resume score out of 100, focusing on the career goal." },

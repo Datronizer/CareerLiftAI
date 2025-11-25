@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import AddCoursePage from "./pages/AddCoursePage";
 import DashboardPage from "./pages/DashboardPage";

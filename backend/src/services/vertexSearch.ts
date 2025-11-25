@@ -1,6 +1,11 @@
-const axios = require('axios');
+import axios from 'axios';
 
-class VertexCourseSearch {
+export class VertexCourseSearch {
+  apiKey: any;
+  model: any;
+  schema: any;
+  enabled: boolean;
+  
   constructor({ apiKey, model, schema }) {
     this.apiKey = apiKey;
     this.model = model || 'gemini-2.5-flash-lite';

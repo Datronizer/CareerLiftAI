@@ -1,4 +1,4 @@
-module.exports = {
+export const LEARNING_SCHEMA = {
   type: "OBJECT",
   properties: {
     courses: {

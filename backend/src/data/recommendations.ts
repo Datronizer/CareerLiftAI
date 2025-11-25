@@ -1,4 +1,4 @@
-module.exports = {
+export const RECOMMENDATIONS_DB = {
   certifications: [
     {
       name: "Google IT Support Professional Certificate",

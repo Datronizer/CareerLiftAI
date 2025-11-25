@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+        "jsx": "react",
+        "outDir": "./built",
+        "allowJs": true,
+        "target": "esnext",
+        "moduleResolution": "nodenext",
+        "module": "nodenext"
+    },
+    "include": [
+        "./src/**/*"
+    ]
+}
