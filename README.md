@@ -1,6 +1,6 @@
 # CareerLift AI – Fullstack App (Frontend + Backend)
 
-This project is a minimal fullstack implementation of **CareerLift AI**, built from your React single-file app and extended with:
+This project is a fork of the main **CareerLift AI**, built in TypeScript.
 
 - A **Vite + React** frontend
 - A **Node + Express** backend that talks to the **Gemini API**
