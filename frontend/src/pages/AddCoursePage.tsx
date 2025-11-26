@@ -1,5 +1,4 @@
 import React, { FC, useEffect, useState } from "react";
-import "./AddCoursePage.scss";
 
 
 const AddCoursePage: FC<{ db: any; userId: string }> = ({ db, userId }) =>
@@ -161,8 +160,8 @@ const AddCoursePage: FC<{ db: any; userId: string }> = ({ db, userId }) =>
     };
 
     return (
-        <div className="courses-page">
-            <div className="courses-header">
+        <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-4 md:px-6">
+            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center">
                 <h2 className="section-title">Courses</h2>
                 {!isDrawerOpen && (
                     <button onClick={handleOpenAdd} className="btn btn-primary shadow-glow">
@@ -179,31 +178,36 @@ const AddCoursePage: FC<{ db: any; userId: string }> = ({ db, userId }) =>
             ) : courses.length === 0 ? (
                 <p className="muted">No courses yet. Click “Add Course” to create one.</p>
             ) : (
-                <div className="course-list">
+                <div className="flex flex-col gap-3">
                     {courses.map((course) => (
-                        <div key={course.id} className="course-card">
-                            <div>
-                                <h3 className="course-card__title">{course.title}</h3>
-                                <p className="course-card__meta">
-                                    <span className="meta-label">Category:</span> {course.category || "N/A"}
+                        <div
+                            key={course.id}
+                            className="flex flex-col justify-between gap-3 rounded-2xl border border-purple-400/40 bg-slate-900/70 p-4 shadow-xl backdrop-blur-xl sm:flex-row"
+                        >
+                            <div className="space-y-1">
+                                <h3 className="text-lg font-bold text-slate-50">{course.title}</h3>
+                                <p className="text-slate-200/85">
+                                    <span className="font-semibold text-cyan-300">Category:</span>{" "}
+                                    {course.category || "N/A"}
                                 </p>
-                                <p className="course-card__meta">
-                                    <span className="meta-label">Level:</span> {course.level || "N/A"}
+                                <p className="text-slate-200/85">
+                                    <span className="font-semibold text-cyan-300">Level:</span>{" "}
+                                    {course.level || "N/A"}
                                 </p>
-                                {course.description && <p className="course-card__desc">{course.description}</p>}
+                                {course.description && <p className="text-slate-200/85">{course.description}</p>}
                                 {course.url && (
                                     <a
                                         href={course.url}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="course-card__link"
+                                        className="text-sm font-semibold text-cyan-300 underline"
                                     >
                                         Open Course
                                     </a>
                                 )}
                             </div>
 
-                            <div className="course-card__actions">
+                            <div className="flex flex-row gap-2 sm:min-w-[140px] sm:flex-col">
                                 <button onClick={() => handleOpenEdit(course)} className="btn btn-ghost">
                                     Edit
                                 </button>
@@ -217,17 +221,19 @@ const AddCoursePage: FC<{ db: any; userId: string }> = ({ db, userId }) =>
             )}
 
             {isDrawerOpen && (
-                <div className="course-drawer">
-                    <div className="course-drawer__header">
-                        <h3 className="drawer-title">{editingCourse ? "Edit Course" : "Add New Course"}</h3>
-                        <button onClick={handleCloseDrawer} className="drawer-close">
+                <div className="fixed inset-y-16 right-0 z-20 w-full max-w-md overflow-y-auto border-l border-purple-400/40 bg-gradient-to-b from-slate-900/95 to-slate-900/85 p-4 shadow-2xl backdrop-blur-xl sm:inset-y-16 sm:w-[380px]">
+                    <div className="mb-3 flex items-center justify-between">
+                        <h3 className="text-lg font-bold text-slate-50">
+                            {editingCourse ? "Edit Course" : "Add New Course"}
+                        </h3>
+                        <button onClick={handleCloseDrawer} className="text-slate-200 hover:text-white">
                             ✕
                         </button>
                     </div>
 
                     {saveError && <p className="alert alert-error">{saveError}</p>}
 
-                    <div className="form-grid">
+                    <div className="flex flex-col gap-3">
                         <label className="field-label">
                             Course Title *
                             <input

@@ -3,7 +3,6 @@ import { Award, Loader, PieChart, Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import IconCard from "../components/IconCard";
 import { fetchJobMatches } from "../services/api";
-import "./JobMatchPage.scss";
 
 
 const JobMatchPage = ({ analysisData }) =>
@@ -51,8 +50,8 @@ const JobMatchPage = ({ analysisData }) =>
     if (!analysisData)
     {
         return (
-            <div className="empty-state">
-                <p className="section-subtitle warning">Analysis data is missing.</p>
+            <div className="space-y-3 px-4 py-8 text-center">
+                <p className="section-subtitle text-rose-300">Analysis data is missing.</p>
                 <button
                     onClick={() => navigate("/upload")}
                     className="btn btn-primary shadow-glow"
@@ -64,12 +63,12 @@ const JobMatchPage = ({ analysisData }) =>
     }
 
     return (
-        <div className="jobs-page">
-            <div className="jobs-header">
+        <div className="mx-auto max-w-5xl space-y-4 px-4 py-4 md:px-6">
+            <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
                 <div>
                     <h2 className="section-title">Job Matches</h2>
                     <p className="section-subtitle">
-                        Tailored to: <span className="accent">{jobTitle}</span>
+                        Tailored to: <span className="font-semibold text-cyan-300">{jobTitle}</span>
                     </p>
                 </div>
                 <button
@@ -80,9 +79,9 @@ const JobMatchPage = ({ analysisData }) =>
                 </button>
             </div>
 
-            <IconCard icon={Search} title="Filters" className="jobs-card">
-                <div className="filters">
-                    <div>
+            <IconCard icon={Search} title="Filters" className="h-full">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(260px,1fr)_minmax(180px,220px)] md:items-end">
+                    <div className="space-y-2">
                         <label className="field-label">Preferred Location (optional)</label>
                         <input
                             className="input"
@@ -91,10 +90,10 @@ const JobMatchPage = ({ analysisData }) =>
                             placeholder="e.g., Toronto, Remote"
                         />
                     </div>
-                    <div className="filter-action">
+                    <div className="flex items-end">
                         <button
                             onClick={() => loadJobs(location)}
-                            className="btn btn-secondary shadow-glow full-width"
+                            className="btn btn-secondary shadow-glow w-full"
                             disabled={isLoading}
                         >
                             {isLoading ? "Searching…" : "Find Jobs"}
@@ -104,12 +103,12 @@ const JobMatchPage = ({ analysisData }) =>
                 <p className="muted small">Using your missing skills and target role to find relevant openings.</p>
             </IconCard>
 
-            <div className="jobs-list">
+            <div className="flex flex-col gap-3">
                 {error && <div className="alert alert-error">{error}</div>}
                 {isLoading ? (
-                    <IconCard icon={Loader} title="Loading jobs..." className="jobs-card">
-                        <div className="progress">
-                            <div className="progress__bar" />
+                    <IconCard icon={Loader} title="Loading jobs..." className="h-full">
+                        <div className="h-2.5 overflow-hidden rounded-full border border-cyan-300/35 bg-slate-900/60">
+                            <div className="h-full w-full bg-gradient-to-r from-cyan-300 to-blue-500 progress-bar-shimmer" />
                         </div>
                     </IconCard>
                 ) : jobs.length ? (
@@ -118,19 +117,19 @@ const JobMatchPage = ({ analysisData }) =>
                             key={idx}
                             icon={PieChart}
                             title={`${job.job_title || "Role"} @ ${job.company || "Company"}`}
-                            className="jobs-card"
+                            className="h-full"
                         >
-                            <div className="job-meta">
-                                <p><span className="meta-label">Location:</span> {job.location || "N/A"}</p>
-                                <p><span className="meta-label">Skills:</span> {job.skills || "N/A"}</p>
-                                <p><span className="meta-label">Qualifications:</span> {job.qualifications || "N/A"}</p>
-                                <p><span className="meta-label">Salary:</span> {job.salary_range || "N/A"}</p>
-                                <p><span className="meta-label">Work Type:</span> {job.work_type || "N/A"}</p>
+                            <div className="grid gap-1 text-sm text-slate-200/85 md:text-base">
+                                <p><span className="font-bold text-cyan-300">Location:</span> {job.location || "N/A"}</p>
+                                <p><span className="font-bold text-cyan-300">Skills:</span> {job.skills || "N/A"}</p>
+                                <p><span className="font-bold text-cyan-300">Qualifications:</span> {job.qualifications || "N/A"}</p>
+                                <p><span className="font-bold text-cyan-300">Salary:</span> {job.salary_range || "N/A"}</p>
+                                <p><span className="font-bold text-cyan-300">Work Type:</span> {job.work_type || "N/A"}</p>
                             </div>
                         </IconCard>
                     ))
                 ) : (
-                    <IconCard icon={Award} title="No jobs found" className="jobs-card">
+                    <IconCard icon={Award} title="No jobs found" className="h-full">
                         <p className="muted small">
                             We couldn't find matches right now. Try adjusting the location or check back later.
                         </p>

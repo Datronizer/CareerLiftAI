@@ -3,7 +3,6 @@ import { Loader, Search, UploadCloud, Zap } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import IconCard from "../components/IconCard";
 import { analyzeResumeWithGemini, uploadResumeFile } from "../services/api";
-import "./UploadPage.scss";
 
 /**
  * UploadPage with:
@@ -137,20 +136,20 @@ const UploadPage = ({ setAnalysisData, db, userId }) =>
     };
 
     return (
-        <div className="upload-page">
+        <div className="mx-auto max-w-6xl space-y-4 px-4 py-4 md:px-6">
             <h2 className="section-title">Analyze Your Career Path</h2>
             <p className="section-subtitle">
                 Upload your resume or paste the content, choose a target role, and let CareerLift generate a tailored action plan.
             </p>
 
-            <div className="upload-grid">
-                <IconCard icon={UploadCloud} title="Resume Content" className="upload-card">
-                    <p className="muted">Paste your resume text here or upload a file to extract text.</p>
-                    <div className="upload-actions">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                <IconCard icon={UploadCloud} title="Resume Content" className="h-full">
+                    <p className="muted mb-3">Paste your resume text here or upload a file to extract text.</p>
+                    <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
                         <input
                             type="file"
                             accept=".pdf,.doc,.docx,.txt"
-                            className="file-input"
+                            className="w-full min-w-0 rounded-xl border border-purple-400/60 bg-slate-900/70 px-3 py-2 text-slate-100 file:mr-4 file:rounded-lg file:border-0 file:bg-purple-700/60 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-slate-100 hover:file:bg-purple-600/70"
                             onChange={(e) =>
                             {
                                 setSelectedFile(e.target.files?.[0] || null);
@@ -174,14 +173,14 @@ const UploadPage = ({ setAnalysisData, db, userId }) =>
                             )}
                         </button>
                     </div>
-                    {selectedFile?.name && (
-                        <div className="file-name" title={selectedFile.name}>
+                        {selectedFile?.name && (
+                        <div className="text-sm text-slate-200/90" title={selectedFile.name}>
                             Selected file: {selectedFile.name}
                         </div>
                     )}
                     {uploadError && <div className="alert alert-error">{uploadError}</div>}
                     <textarea
-                        className="textarea resume-input"
+                        className="textarea h-64 resize-y font-mono"
                         placeholder="Start by pasting your full resume content (experience, education, skills, projects)..."
                         value={resumeText}
                         onChange={(e) =>
@@ -193,9 +192,9 @@ const UploadPage = ({ setAnalysisData, db, userId }) =>
                     />
                 </IconCard>
 
-                <IconCard icon={Search} title="Career Goal & Action" className="upload-card">
-                    <div className="goal-block">
-                        <label htmlFor="career-goal" className="field-label">
+                <IconCard icon={Search} title="Career Goal & Action" className="h-full">
+                    <div className="flex flex-col gap-3 pb-3">
+                        <label htmlFor="career-goal" className="field-label text-base">
                             Target Career Goal
                         </label>
                         <select
@@ -213,7 +212,7 @@ const UploadPage = ({ setAnalysisData, db, userId }) =>
                         </select>
 
                         {careerGoal === "Other (custom)" && (
-                            <div className="custom-goal">
+                            <div className="mt-1 flex flex-col gap-2">
                                 <label htmlFor="custom-career-goal" className="field-label">
                                     Enter your own career goal
                                 </label>
@@ -238,27 +237,27 @@ const UploadPage = ({ setAnalysisData, db, userId }) =>
                         </p>
                     </div>
 
-                    <div className="goal-actions">
+                    <div className="mt-4 flex flex-col gap-3 border-t border-purple-500/40 pt-4">
                         {error && <div className="alert alert-error">{error}</div>}
                         {isAnalyzing && (
-                            <div className="progress">
-                                <div className="progress__bar" />
-                                <p className="progress__text">{analysisStatus || "Analyzing..."}</p>
+                            <div className="rounded-xl border border-cyan-300/35 bg-slate-900/60 p-3">
+                                <div className="h-1.5 w-full rounded-full bg-gradient-to-r from-cyan-300 to-blue-500 progress-bar-shimmer" />
+                                <p className="mt-2 text-sm text-slate-200/90">{analysisStatus || "Analyzing..."}</p>
                             </div>
                         )}
                         <button
                             onClick={handleAnalyze}
-                            className="btn btn-primary shadow-glow analyze-btn"
+                            className="btn btn-primary shadow-glow w-full"
                             disabled={isAnalyzing || isUploading || resumeText.length < 50}
                         >
                             {isAnalyzing ? (
                                 <>
-                                    <Loader className="icon-md" />
+                                    <Loader className="h-5 w-5" />
                                     Analyzing with Gemini...
                                 </>
                             ) : (
                                 <>
-                                    <Zap className="icon-md" />
+                                    <Zap className="h-5 w-5" />
                                     Analyze &amp; Get Personalized Plan
                                 </>
                             )}
