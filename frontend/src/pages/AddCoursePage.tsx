@@ -1,4 +1,5 @@
 import React, { FC, useEffect, useState } from "react";
+import { apiBaseUrl } from "../config/env";
 
 
 const AddCoursePage: FC<{ db: any; userId: string }> = ({ db, userId }) =>
@@ -20,15 +21,13 @@ const AddCoursePage: FC<{ db: any; userId: string }> = ({ db, userId }) =>
     const [saveError, setSaveError] = useState(null);
     const [success, setSuccess] = useState(null);
 
-    const API_BASE = "http://localhost:4000"; // change if your backend uses another port
-
     const fetchCourses = async () =>
     {
         try
         {
             setLoading(true);
             setListError(null);
-            const res = await fetch(`${API_BASE}/api/courses`);
+            const res = await fetch(`${apiBaseUrl}/courses`);
             const data = await res.json();
             setCourses(data || []);
         } catch (err)
@@ -105,14 +104,14 @@ const AddCoursePage: FC<{ db: any; userId: string }> = ({ db, userId }) =>
             let res;
             if (editingCourse)
             {
-                res = await fetch(`${API_BASE}/api/courses/${editingCourse.id}`, {
+                res = await fetch(`${apiBaseUrl}/courses/${editingCourse.id}`, {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
                 });
             } else
             {
-                res = await fetch(`${API_BASE}/api/courses`, {
+                res = await fetch(`${apiBaseUrl}/courses`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
@@ -144,7 +143,7 @@ const AddCoursePage: FC<{ db: any; userId: string }> = ({ db, userId }) =>
 
         try
         {
-            const res = await fetch(`${API_BASE}/api/courses/${id}`, {
+            const res = await fetch(`${apiBaseUrl}/courses/${id}`, {
                 method: "DELETE",
             });
             const data = await res.json();

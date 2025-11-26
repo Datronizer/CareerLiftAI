@@ -1,5 +1,6 @@
 import { collection, doc, setDoc } from "firebase/firestore";
 import { appId } from "../config/appConfig";
+import { apiBaseUrl } from "../config/env";
 
 // Gemini analysis API call and Firestore persistence
 export const analyzeResumeWithGemini = async (db, userId, resumeText, careerGoal) =>
@@ -9,7 +10,7 @@ export const analyzeResumeWithGemini = async (db, userId, resumeText, careerGoal
     {
         try
         {
-            const response = await fetch("/api/analyze", {
+            const response = await fetch(`${apiBaseUrl}/analyze`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ resumeText, careerGoal }),
@@ -58,7 +59,7 @@ export const uploadResumeFile = async (file, careerGoal) =>
         formData.append("careerGoal", careerGoal);
     }
 
-    const response = await fetch("/api/upload-resume", {
+    const response = await fetch(`${apiBaseUrl}/upload-resume`, {
         method: "POST",
         body: formData,
     });
@@ -81,7 +82,7 @@ export const uploadResumeFile = async (file, careerGoal) =>
 // Fetch live courses/opportunities from backend (/api/courses)
 export const fetchLearningResources = async (role, skills = []) =>
 {
-    const response = await fetch("/api/courses/external", {
+    const response = await fetch(`${apiBaseUrl}/courses/external`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role, skills }),
@@ -104,7 +105,7 @@ export const fetchJobMatches = async ({
     limit = 10,
 }) =>
 {
-    const response = await fetch("/api/jobs", {
+    const response = await fetch(`${apiBaseUrl}/jobs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ skills, location, jobTitle, limit }),
