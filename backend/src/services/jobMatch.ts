@@ -87,5 +87,3 @@ export class JobMatchService
         return rows || [];
     }
 }
-
-module.exports = JobMatchService;
